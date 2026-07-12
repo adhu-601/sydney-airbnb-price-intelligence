@@ -1,0 +1,26 @@
+# Data (downloaded/reproducible via `airbnb-pricer download`)
+data/raw/
+data/processed/
+
+# Trained model artifacts (reproducible via `airbnb-pricer train`)
+models/*.joblib
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Streamlit
+.streamlit/secrets.toml

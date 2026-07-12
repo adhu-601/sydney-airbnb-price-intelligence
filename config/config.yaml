@@ -1,0 +1,55 @@
+# Central configuration for the Sydney Airbnb price-intelligence pipeline.
+# Every stage (download -> prepare -> train -> evaluate) reads from this file
+# so experiments are reproducible and reviewable in one place.
+
+data:
+  # Inside Airbnb snapshot for Sydney, NSW, Australia.
+  # Browse available snapshots at https://insideairbnb.com/get-the-data/
+  snapshot_date: "2026-06-16"
+  base_url: "https://data.insideairbnb.com/australia/nsw/sydney"
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+
+target:
+  # Nightly price (AUD) thresholds that define the three market tiers.
+  # Calibrated to the 2026-06-16 snapshot (median $291/night): round numbers
+  # near the market terciles so the tiers stay balanced and meaningful.
+  # (The original 2025 research used $100/$200; Sydney prices have moved.)
+  budget_max: 200        # Budget:     $0 - $200
+  mid_market_max: 400    # Mid-Market: $200 - $400
+                         # Premium:    > $400
+  # Sanity bounds: listings outside this range are treated as data errors
+  # (e.g. $0 placeholders or $90,000/night typos).
+  min_price: 10
+  max_price: 5000
+
+features:
+  # Sydney CBD reference point (Town Hall) for distance features.
+  cbd_lat: -33.8688
+  cbd_lon: 151.2093
+  # Major swimming beaches used for the distance-to-nearest-beach feature.
+  beaches:
+    bondi: [-33.8908, 151.2743]
+    manly: [-33.7963, 151.2876]
+    coogee: [-33.9205, 151.2585]
+    cronulla: [-34.0587, 151.1526]
+    palm_beach: [-33.5983, 151.3237]
+  # Neighbourhoods with consistently high tourist demand.
+  popular_areas: ["Bondi", "Manly", "Sydney", "Waverley", "Randwick"]
+  # Keep the N most frequent property types; collapse the tail into "Other".
+  max_property_types: 12
+  # Amenities that get their own boolean flag (matched case-insensitively).
+  key_amenities: ["pool", "air conditioning", "free parking", "washer", "dishwasher", "gym"]
+
+model:
+  test_size: 0.2
+  random_state: 42
+  cv_folds: 5
+  # Names must match the registry in airbnb_pricer/models/train.py
+  candidates: ["baseline_majority", "logistic_regression", "random_forest", "xgboost"]
+  primary_metric: "f1_macro"
+
+paths:
+  model_dir: "models"
+  reports_dir: "reports"
+  figures_dir: "reports/figures"

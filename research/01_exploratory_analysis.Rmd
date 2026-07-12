@@ -1,0 +1,1006 @@
+---
+title: "Sydney Airbnb Price Classification Analysis"
+subtitle: "STAT5003 Computational Statistical Methods - Group Project"
+author: "W14 _ Group [03]"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+    highlight: tango
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width = 10,
+  fig.height = 6,
+  fig.align = "center"
+)
+```
+
+# Executive Summary
+
+This project develops machine learning classification models to predict Sydney Airbnb property price categories (Budget, Mid-Market, Premium) using property characteristics, location data, and host information. Our analysis addresses key Australian housing market challenges while providing actionable insights for the tourism and rental property sectors.
+
+**Key Findings:** - Analysis of **15,007** Sydney Airbnb properties across **33** neighborhoods. **Property type and location** emerged as the strongest predictors of price category. The **Gradient Boosting model** achieved an accuracy of approximately **77%** in classification. Premium properties concentrated in **Sydney CBD, Eastern Suburbs (Bondi, Coogee), and Northern Beaches (Manly)**
+
+------------------------------------------------------------------------
+
+# Problem Definition
+
+## Research Question
+
+**Can we predict whether a Sydney Airbnb property will be classified as Premium (\>\$200/night), Mid-Market (\$100-200/night), or Budget (\<\$100/night) based on property characteristics, location, and host factors?**
+
+## Classification Problem Framework
+
+This project addresses a **multi-class classification problem** with three distinct target categories:
+
+-   **Premium**: Properties \>\$200/night (luxury market segment)
+-   **Mid-Market**: Properties \$100-200/night (mainstream market)
+-   **Budget**: Properties \<\$100/night (budget-conscious travelers)
+
+The classification approach enables: - **Predictive insights** for property investors - **Market segmentation** analysis for tourism planning - **Pricing strategy** guidance for hosts
+
+# Data Description
+
+```{r load-libraries}
+# Load required libraries
+library(tidyverse)      # Data manipulation and visualization
+library(VIM)           # Missing data visualization
+library(corrplot)      # Correlation plots
+library(ggplot2)       # Advanced plotting
+library(dplyr)         # Data manipulation
+library(readr)         # Reading CSV files
+library(stringr)       # String manipulation
+library(plotly)        # Interactive plots
+library(gridExtra)     # Multiple plots
+library(scales)        # Scale formatting
+library(knitr)         # Table formatting
+library(DT)            # Interactive tables
+```
+
+## Data Source
+
+**Primary Dataset:** Inside Airbnb Sydney Listings
+
+**Citation:** \> Inside Airbnb. (2025). Sydney, New South Wales, Australia Dataset. Retrieved from <http://insideairbnb.com/get-the-data/>. Data sourced from publicly available information from Airbnb.com. Murray Cox, Inside Airbnb Project.
+
+**Data Collection Method:** Web scraping of publicly available Airbnb listing information
+
+**Data Currency:** Most recent quarterly snapshot available (2025)
+
+```{r load-data}
+
+# Load and examine the dataset
+listings_raw <- read_csv("listings.csv")
+
+# Replace all "N/A" values with blank in character columns
+char_cols <- names(listings_raw)[sapply(listings_raw, is.character)]
+for(col in char_cols) {
+  listings_raw[[col]][listings_raw[[col]] == "N/A"] <- ""
+}
+
+# Define variables
+dims <- paste(dim(listings_raw), collapse = " x ")
+nvars <- ncol(listings_raw)
+cols <- paste(head(names(listings_raw), 20), collapse = ", ")
+
+# Print all in one cat
+cat(" Full dataset dimensions:", dims, "\n", "Total variables available:", nvars, "\n",
+  "First 20 column names:", cols, "\n"
+)
+```
+
+## Feature Selection Strategy
+
+Given the comprehensive nature of the Inside Airbnb dataset (75+ variables), we employ a strategic feature selection approach focusing on variables most relevant to pricing classification.
+
+```{r feature-selection}
+# FEATURE SELECTION: Choose most relevant variables for classification
+selected_features <- c(
+  "id", "price", "property_type", "room_type", "accommodates",
+  "bedrooms", "bathrooms", "amenities", "neighbourhood_cleansed",
+  "latitude", "longitude", "host_is_superhost", "host_response_rate",
+  "host_listings_count", "host_identity_verified", "review_scores_rating",
+  "number_of_reviews", "reviews_per_month", "availability_365",
+  "minimum_nights"
+)
+```
+
+## Dataset Overview
+
+```{r dataset-overview}
+# Basic dataset information
+
+# Select only the chosen features
+listings <- listings_raw %>%
+  select(all_of(selected_features))
+
+# Variable types
+numeric_vars <- listings %>% select_if(is.numeric) %>% names()
+character_vars <- listings %>% select_if(is.character) %>% names()
+
+
+
+cat(" DATASET SUMMARY:\n", "Number of observations:", nrow(listings), ", Number of variables:", ncol(listings), "\n", "\n VARIABLE TYPES:\n", "Numeric variables (", length(numeric_vars), "):", paste(numeric_vars, collapse = ", "), "\n","Character variables (", length(character_vars), "):", paste(character_vars, collapse = ", "), "\n")
+```
+
+## Target Variable Creation
+
+```{r target-variable, fig.height=6}
+# Create target variable based on price thresholds
+
+# Clean price data
+listings$price_numeric <- as.numeric(gsub("[$,]", "", listings$price))
+
+# Create price categories
+listings$price_category <- cut(
+  listings$price_numeric,
+  breaks = c(0, 100, 200, Inf),
+  labels = c("Budget", "Mid-Market", "Premium"),
+  include.lowest = TRUE
+)
+
+# Summaries
+price_summary <- summary(listings$price_numeric)
+target_dist <- table(listings$price_category)
+target_props <- prop.table(target_dist) * 100
+
+# Single cat with everything
+cat(
+  "CREATING TARGET VARIABLE:\n\n",
+  "PRICE SUMMARY (in $ per night):\n",
+  sprintf("Min       : %.2f\n", price_summary["Min."]),
+  sprintf("1st Qu.   : %.2f\n", price_summary["1st Qu."]),
+  sprintf("Median    : %.2f\n", price_summary["Median"]),
+  sprintf("Mean      : %.2f\n", price_summary["Mean"]),
+  sprintf("3rd Qu.   : %.2f\n", price_summary["3rd Qu."]),
+  sprintf("Max       : %.2f\n\n", price_summary["Max."]),
+  "TARGET VARIABLE DEFINITION:\n",
+  "- Budget      : $0-100/night (Budget-conscious travelers)\n",
+  "- Mid-Market  : $100-200/night (Mainstream market)\n",
+  "- Premium     : >$200/night (Luxury segment)\n\n",
+  "TARGET VARIABLE DISTRIBUTION:\n",
+  sprintf("Budget      : %d (%.2f%%)\n", target_dist["Budget"], target_props["Budget"]),
+  sprintf("Mid-Market  : %d (%.2f%%)\n", target_dist["Mid-Market"], target_props["Mid-Market"]),
+  sprintf("Premium     : %d (%.2f%%)\n", target_dist["Premium"], target_props["Premium"]),
+  sep = ""
+)
+
+# Plot (still separate as ggplot returns a plot)
+ggplot(listings, aes(x = price_category, fill = price_category)) +
+  geom_bar() +
+  geom_text(stat = 'count', aes(label = ..count..), vjust = -0.5) +
+  labs(title = "Distribution of Sydney Airbnb Price Categories",
+       subtitle = "Classification Target Variable",
+       x = "Price Category", y = "Number of Properties") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Budget" = "#2ecc71", "Mid-Market" = "#f39c12", "Premium" = "#e74c3c")) +
+  theme(legend.position = "none")
+```
+
+------------------------------------------------------------------------
+
+# Data Cleaning and Preparation
+
+```{r data-cleaning}
+
+output_text <- ""
+
+# Initial data dimensions
+initial_dim <- dim(listings)
+output_text <- paste0(output_text, "Initial data dimensions: ", initial_dim[1], " rows x ", initial_dim[2], " columns\n\n")
+
+# 1. Handle price data
+listings$price_numeric <- as.numeric(gsub("[$,]", "", listings$price))
+outlier_threshold <- 1000
+initial_count <- nrow(listings)
+listings <- listings %>% filter(price_numeric > 0 & price_numeric <= outlier_threshold)
+removed_outliers <- initial_count - nrow(listings)
+output_text <- paste0(output_text, "Removed ", removed_outliers, " extreme price outliers (>$", outlier_threshold, ")\n")
+output_text <- paste0(output_text, "Remaining observations: ", nrow(listings), "\n\n")
+
+# 2. Clean host_is_superhost
+listings$host_is_superhost <- ifelse(listings$host_is_superhost == "t", TRUE, FALSE)
+
+# 3. Handle host_response_rate
+if("host_response_rate" %in% names(listings)) {
+  listings$host_response_rate <- as.numeric(gsub("%", "", listings$host_response_rate)) / 100
+}
+
+# 4. Process amenities
+if("amenities" %in% names(listings)) {
+  listings$amenities_count <- ifelse(
+    is.na(listings$amenities) | listings$amenities == "" | listings$amenities == "[]",
+    0,
+    str_count(listings$amenities, '",') + 1
+  )
+} else {
+  listings$amenities_count <- 0
+}
+
+# 5. Handle missing values
+missing_summary <- listings %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  mutate(missing_percent = round(missing_count / nrow(listings) * 100, 2)) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_percent))
+
+if(nrow(missing_summary) > 0) {
+  for(i in 1:nrow(missing_summary)) {
+    output_text <- paste0(output_text, sprintf("- %s: %d missing (%.2f%%)\n",
+                                               missing_summary$variable[i],
+                                               missing_summary$missing_count[i],
+                                               missing_summary$missing_percent[i]))
+  }
+  output_text <- paste0(output_text, "\n")
+  
+  # Imputation
+  if("reviews_per_month" %in% missing_summary$variable) {
+    listings$reviews_per_month[is.na(listings$reviews_per_month)] <- 0
+  }
+  if("host_is_superhost" %in% missing_summary$variable) {
+    listings$host_is_superhost[is.na(listings$host_is_superhost)] <- FALSE
+  }
+  if("bathrooms" %in% missing_summary$variable) {
+    median_bathrooms <- median(listings$bathrooms, na.rm = TRUE)
+    listings$bathrooms[is.na(listings$bathrooms)] <- median_bathrooms
+  }
+  if("host_listings_count" %in% missing_summary$variable) {
+    listings$host_listings_count[is.na(listings$host_listings_count)] <- 1
+  }
+  if("host_identity_verified" %in% missing_summary$variable) {
+    listings$host_identity_verified[is.na(listings$host_identity_verified)] <- FALSE
+  }
+  if("bedrooms" %in% missing_summary$variable) {
+    listings$bedrooms[is.na(listings$bedrooms)] <- ceiling(listings$accommodates[is.na(listings$bedrooms)] / 2)
+  }
+  if("review_scores_rating" %in% missing_summary$variable) {
+    median_rating <- median(listings$review_scores_rating, na.rm = TRUE)
+    listings$review_scores_rating[is.na(listings$review_scores_rating)] <- median_rating
+  }
+  if("host_response_rate" %in% missing_summary$variable) {
+    median_response_rate <- median(listings$host_response_rate, na.rm = TRUE)
+    listings$host_response_rate[is.na(listings$host_response_rate)] <- median_response_rate
+  }
+} else {
+  output_text <- paste0(output_text, "5. Handling missing values... No missing values detected after initial cleaning\n")
+}
+
+# Verify missing
+missing_after <- listings %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  filter(missing_count > 0)
+
+if(nrow(missing_after) > 0) {
+  output_text <- paste0(output_text, "\nVERIFYING IMPUTATION RESULTS:\n  Still have missing values in:\n")
+  for(i in 1:nrow(missing_after)) {
+    output_text <- paste0(output_text, sprintf("- %s: %d missing\n",
+                                               missing_after$variable[i],
+                                               missing_after$missing_count[i]))
+  }
+} else {
+  output_text <- paste0(output_text, "\nVERIFYING IMPUTATION RESULTS:\n All missing values successfully handled!\n")
+}
+
+output_text <- paste0(output_text, " Missing data imputation strategy completed.\n\n")
+
+# 6. Feature engineering
+listings <- listings %>%
+  mutate(
+    is_popular_area = neighbourhood_cleansed %in% c("Bondi", "Sydney", "Manly", "Darlinghurst", "Surry Hills"),
+    distance_from_cbd = sqrt((latitude - (-33.8688))^2 + (longitude - 151.2093)^2),
+    property_size = case_when(
+      accommodates <= 2 ~ "Small",
+      accommodates <= 4 ~ "Medium",
+      accommodates <= 8 ~ "Large",
+      TRUE ~ "Extra Large"
+    ),
+    host_experience = case_when(
+      host_listings_count == 1 ~ "Single Property",
+      host_listings_count <= 5 ~ "Small Portfolio",
+      TRUE ~ "Large Portfolio"
+    ),
+    availability_level = case_when(
+      availability_365 < 90 ~ "Low",
+      availability_365 < 180 ~ "Medium",
+      TRUE ~ "High"
+    )
+  )
+
+# 7. Remove duplicates
+initial_rows <- nrow(listings)
+listings <- listings %>% distinct()
+duplicates_removed <- initial_rows - nrow(listings)
+
+# Recreate target variable
+listings$price_category <- cut(listings$price_numeric,
+                               breaks = c(0, 100, 200, Inf),
+                               labels = c("Budget", "Mid-Market", "Premium"),
+                               include.lowest = TRUE)
+
+# Final dataset summary
+final_dim <- dim(listings)
+final_target_dist <- table(listings$price_category)
+final_target_prop <- round(prop.table(final_target_dist), 3)
+
+output_text <- paste0(output_text, "FINAL CLEANED DATASET:\nDimensions: ", final_dim[1], " rows x ", final_dim[2], " columns\n")
+output_text <- paste0(output_text, "Complete cases: ", sum(complete.cases(listings)), "\n\n")
+output_text <- paste0(output_text, "Final target distribution:\n")
+for(level in names(final_target_dist)) {
+  output_text <- paste0(output_text, sprintf("%-10s : %d (%.3f)\n", level, final_target_dist[level], final_target_prop[level]))
+}
+
+# Single cat() to output everything
+cat(output_text)
+
+```
+
+------------------------------------------------------------------------
+
+# Exploratory Data Analysis
+
+## Price Distribution Analysis
+
+```{r price-analysis, fig.height=4, fig.width=8}
+p1 <- ggplot(listings, aes(x = price_numeric)) +
+  geom_histogram(bins = 50, fill = "skyblue", alpha = 0.7) +
+  geom_vline(xintercept = c(100, 200), color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Distribution of Nightly Prices (AUD)",
+       subtitle = "Red lines indicate price category thresholds",
+       x = "Price per Night (AUD)", y = "Frequency") +
+  theme_minimal() +
+  scale_x_continuous(labels = dollar_format(prefix = "$"))
+
+# Distance from CBD analysis
+p2 <- ggplot(listings, aes(x = price_category, y = distance_from_cbd, fill = price_category)) +
+  geom_boxplot() +
+  labs(title = "Distance from CBD by Price Category",
+       subtitle = "Premium properties tend to be closer to city center",
+       x = "Price Category", y = "Distance from CBD") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Budget" = "#2ecc71", "Mid-Market" = "#f39c12", "Premium" = "#e74c3c")) +
+  theme(legend.position = "none")
+
+grid.arrange(p1, p2, ncol=2)
+
+
+
+```
+
+## Property Characteristics Analysis
+
+```{r property-analysis, fig.height=5, fig.width=12}
+# Property type analysis
+p3 <- listings %>%
+  count(property_type, price_category) %>%
+  group_by(property_type) %>%
+  filter(sum(n) >= 50) %>%     # keep property types with >= 50 listings
+  ungroup() %>%
+  ggplot(aes(x = reorder(property_type, n), y = n, fill = price_category)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  coord_flip() +
+  labs(title = "Property Types by Price Category",
+       subtitle = "Only property types with 50+ listings shown",
+       x = "Property Type", y = "Count") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Budget" = "#2ecc71",
+                               "Mid-Market" = "#f39c12",
+                               "Premium" = "#e74c3c"))
+
+# Room type analysis
+p4 <- listings %>%
+  ggplot(aes(x = room_type, fill = price_category)) +
+  geom_bar(position = "fill") +
+  labs(title = "Room Type Composition by Price Category",
+       subtitle = "Proportion of each price category within room types",
+       x = "Room Type", y = "Proportion") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Budget" = "#2ecc71",
+                               "Mid-Market" = "#f39c12",
+                               "Premium" = "#e74c3c")) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Arrange both plots
+gridExtra::grid.arrange(p3, p4, ncol = 2)
+
+```
+
+## Host Quality Analysis
+
+```{r host-analysis, fig.height=4, fig.width=8}
+
+output_text <- ""
+
+# Unique values and counts of host_is_superhost
+unique_values <- unique(listings$host_is_superhost)
+value_counts <- table(listings$host_is_superhost, useNA = "ifany")
+output_text <- paste0(output_text, "Unique values in host_is_superhost:", paste(unique_values, collapse=", "), "\n\n")
+output_text <- paste0(output_text, "Value counts:")
+for(name in names(value_counts)) {
+  output_text <- paste0(output_text, name, " : ", value_counts[name], "\n")
+}
+
+# Prepare host_type and summary table
+host_summary <- listings %>%
+  filter(!is.na(host_is_superhost)) %>%
+  mutate(
+    host_type = case_when(
+      host_is_superhost == TRUE | host_is_superhost == "t" ~ "Superhost",
+      host_is_superhost == FALSE | host_is_superhost == "f" ~ "Regular Host",
+      TRUE ~ "Unknown"
+    )
+  ) %>%
+  filter(host_type != "Unknown") %>%
+  count(host_type, price_category) %>%
+  spread(price_category, n, fill = 0)
+
+# Append host summary to output_text
+output_text <- paste0(output_text, "\nHost Type Distribution by Price Category:\n")
+for(i in 1:nrow(host_summary)) {
+  output_text <- paste0(output_text,
+                        sprintf("%-12s : Budget=%d, Mid-Market=%d, Premium=%d\n",
+                                host_summary$host_type[i],
+                                host_summary$Budget[i],
+                                host_summary$`Mid-Market`[i],
+                                host_summary$Premium[i]))
+}
+
+# Single cat() output
+cat(output_text)
+
+# Create plots (plots are separate from cat)
+p5 <- listings %>%
+  filter(!is.na(host_is_superhost)) %>%
+  mutate(
+    host_type = case_when(
+      host_is_superhost == TRUE | host_is_superhost == "t" ~ "Superhost",
+      host_is_superhost == FALSE | host_is_superhost == "f" ~ "Regular Host",
+      TRUE ~ "Unknown"
+    )
+  ) %>%
+  filter(host_type != "Unknown") %>%
+  count(host_type, price_category) %>%
+  ggplot(aes(x = host_type, y = n, fill = price_category)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Superhost Status by Price Category",
+       x = "Host Type", y = "Count") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Budget" = "#2ecc71", "Mid-Market" = "#f39c12", "Premium" = "#e74c3c"))
+
+p6 <- listings %>%
+  filter(!is.na(review_scores_rating)) %>%
+  ggplot(aes(x = price_category, y = review_scores_rating, fill = price_category)) +
+  geom_boxplot() +
+  labs(title = "Review Scores by Price Category",
+       x = "Price Category", y = "Review Score Rating") +
+  theme_minimal() +
+  scale_fill_manual(values = c("Budget" = "#2ecc71", "Mid-Market" = "#f39c12", "Premium" = "#e74c3c")) +
+  theme(legend.position = "none")
+
+grid.arrange(p5, p6, ncol = 2, heights=3)
+
+```
+
+## Correlation Analysis
+
+```{r correlation-analysis, fig.height=8, fig.width=9}
+# Select numeric variables for correlation analysis
+numeric_data <- listings %>%
+  select(price_numeric, accommodates, bedrooms, bathrooms, host_listings_count,
+         number_of_reviews, review_scores_rating, availability_365,
+         distance_from_cbd, amenities_count, minimum_nights) %>%
+  filter(complete.cases(.))
+
+# Calculate correlation matrix
+correlation_matrix <- cor(numeric_data)
+
+# Create correlation plot
+corrplot(correlation_matrix, method = "circle", type = "upper",
+         order = "hclust", tl.cex = 0.7, tl.col = "black",tl.srt = 45,mar = c(0, 0, 2, 0),
+         title = "Correlation Matrix of Numeric Variables")
+
+# Display correlation table for key variables
+key_correlations <- correlation_matrix["price_numeric", ] %>%
+  sort(decreasing = TRUE) %>%
+  round(3)
+
+cat("Correlations with Price:\n", key_correlations)
+```
+
+## Missing Data Patterns
+
+```{r missing-data}
+
+output_text <- ""
+
+# Final check for missing data patterns
+missing_final <- listings %>%
+  summarise_all(~sum(is.na(.))) %>%
+  gather(variable, missing_count) %>%
+  mutate(missing_percent = round(missing_count / nrow(listings) * 100, 2)) %>%
+  filter(missing_count > 0) %>%
+  arrange(desc(missing_percent))
+
+if(nrow(missing_final) > 0) {
+  output_text <- paste0(output_text, "Remaining missing data after cleaning:\n")
+  for(i in 1:nrow(missing_final)) {
+    output_text <- paste0(output_text,
+                          sprintf("%-25s : %d missing (%.2f%%)\n",
+                                  missing_final$variable[i],
+                                  missing_final$missing_count[i],
+                                  missing_final$missing_percent[i]))
+  }
+} else {
+  output_text <- paste0(output_text, "No missing data remaining after cleaning process\n")
+}
+
+# Data quality summary
+total_obs <- nrow(listings)
+complete_cases <- sum(complete.cases(listings))
+completeness_pct <- round(complete_cases / total_obs * 100, 2)
+
+output_text <- paste0(output_text, "\nDATA QUALITY SUMMARY:\n",
+                      "Total observations : ", total_obs, "\n",
+                      "Complete cases     : ", complete_cases, "\n",
+                      "Data completeness  : ", completeness_pct, "%\n")
+
+# Single cat() call
+cat(output_text)
+```
+
+------------------------------------------------------------------------
+
+# Modeling Plan
+
+## Selected Classification Models
+
+We will implement **five classification algorithms** prioritizing methods taught in STAT5003:
+
+### **1. Multinomial Logistic Regression**
+
+-    **Purpose:** Baseline interpretable model
+
+-    **Library:** `nnet::multinom()`
+
+-    **Strengths:** Interpretable coefficients, fast training, probability outputs
+
+-    **Use Case:** Understanding linear relationships between features and price categories
+
+-    **Reason for dataset:** Provides a transparent baseline for evaluating how property size, host attributes, and location contribute linearly to pricing tiers in Sydney.
+
+### **2. Random Forest**
+
+-    **Purpose:** Ensemble method with robust performance
+
+-    **Library:** `randomForest::randomForest()`
+
+-    **Strengths:** Handles mixed data types, provides feature importance, resistant to overfitting
+
+-    **Use Case:** Capturing non-linear relationships and feature interactions
+
+-    **Reason for dataset:** Airbnb listings in Sydney combine categorical (property type, neighborhood) and numerical (distance from CBD, reviews) features. Random Forest can effectively model these while highlighting the most influential drivers of premium pricing.
+
+**3. Support Vector Machine (SVM)**
+
+-    **Purpose:** High-dimensional classification with kernel methods
+
+-    **Library:** `e1071::svm()`
+
+-    **Strengths:** Effective with high-dimensional data, memory efficient, robust to outliers
+
+-    **Use Case:** Complex decision boundaries in feature space
+
+-    **Reason for dataset:** Price categories may overlap due to similar property features across neighborhoods. SVM’s kernel functions allow flexible non-linear boundaries that can separate such overlapping groups.
+
+**4. LDA (Linear Discriminant Analysis)**
+
+-    **Purpose:** Dimensionality reduction and classification
+
+-    **Library:** `MASS::lda()`
+
+-    **Strengths:** Simple, interpretable, efficient with well-separated classes
+
+-    **Use Case:** Projecting features into lower dimensions to maximize class separation
+
+-    **Reason for dataset:** With many correlated predictors (e.g., bedrooms, accommodates, property size), LDA helps reduce redundancy while retaining class-separating information, offering interpretable boundaries between price categories.
+
+**5. K-Nearest Neighbors (KNN)**
+
+-    **Purpose:** Non-parametric, instance-based learning
+
+-    **Library:** `class::knn()`
+
+-    **Strengths:** Simple implementation, no distributional assumptions, local pattern recognition
+
+-    **Use Case:** Geographic clustering effects and local neighborhood patterns
+
+-    **Reason for dataset:** Sydney pricing is highly localized — similar listings within the same suburb often fall in the same price tier. KNN directly leverages this locality by classifying based on nearest comparable properties.
+
+## Model Evaluation Framework
+
+### Data Splitting Strategy
+
+```{r data-splitting}
+library(caret)
+
+# Stratified train-test split (70-30)
+set.seed(123)
+train_indices <- createDataPartition(listings$price_category, p = 0.7, list = FALSE)
+train_data <- listings[train_indices, ]
+test_data <- listings[-train_indices, ]
+
+# Compute sizes and percentages
+train_size <- nrow(train_data)
+test_size <- nrow(test_data)
+train_pct <- round(train_size / nrow(listings) * 100, 1)
+test_pct <- round(test_size / nrow(listings) * 100, 1)
+
+# Class distributions
+train_dist <- round(prop.table(table(train_data$price_category)), 3)
+test_dist <- round(prop.table(table(test_data$price_category)), 3)
+
+# Prepare single cat output
+output_text <- paste0(
+  "DATA SPLITTING SUMMARY:\n",
+  "Training set size: ", train_size, " (", train_pct, "%)\n",
+  "Test set size    : ", test_size, " (", test_pct, "%)\n\n",
+  "Class distribution in training set:\n",
+  paste(names(train_dist), ":", train_dist, collapse = "\n"), "\n\n",
+  "Class distribution in test set:\n",
+  paste(names(test_dist), ":", test_dist, collapse = "\n"), "\n"
+)
+
+# Single cat() call
+cat(output_text)
+```
+
+### Cross-Validation Strategy
+
+-   **Method**: 5-fold cross-validation on training set
+-   **Repetitions**: 3 repetitions for robust estimates
+-   **Stratification**: Maintain class proportions within each fold
+
+### Evaluation Metrics
+
+Our comprehensive evaluation will include:
+
+#### 1. **Overall Performance Metrics**
+
+-   **Accuracy**: Proportion of correctly classified instances
+-   **Kappa Statistic**: Agreement between predicted and actual classifications (accounting for chance)
+
+#### 2. **Class-Specific Metrics**
+
+-   **Precision**: True Positives / (True Positives + False Positives)
+-   **Recall (Sensitivity)**: True Positives / (True Positives + False Negatives)
+-   **F1-Score**: Harmonic mean of Precision and Recall
+-   **Specificity**: True Negatives / (True Negatives + False Positives)
+
+#### 3. **Multi-Class Extensions**
+
+-   **Macro-averaged metrics**: Average metrics across all classes
+-   **Weighted-averaged metrics**: Class-size weighted averages
+-   **Confusion Matrix**: Detailed classification breakdown
+
+#### 4. **Advanced Metrics**
+
+-   **Area Under ROC Curve (AUC)**: For each class vs. rest
+-   **Log-Loss**: Probabilistic classification error
+-   **Balanced Accuracy**: Average of class-specific accuracies
+
+### Feature Engineering for Models
+
+```{r feature-engineering}
+# Prepare features for modeling
+prepare_features <- function(data) {
+  model_data <- data %>%
+    select(
+      # Numeric features
+      accommodates, bedrooms, bathrooms, host_listings_count,
+      number_of_reviews, review_scores_rating, availability_365,
+      minimum_nights, distance_from_cbd, amenities_count,
+      
+      # Categorical features  
+      property_type, room_type, neighbourhood_cleansed,
+      host_is_superhost, host_identity_verified,
+      is_popular_area, property_size, host_experience,
+      availability_level,
+      
+      # Target variable
+      price_category
+    ) %>%
+    na.omit()  # Remove any remaining missing values
+  return(model_data)
+}
+
+# Prepare datasets
+train_features <- prepare_features(train_data)
+test_features <- prepare_features(test_data)
+
+# Feature type summary
+feature_types <- train_features %>%
+  select(-price_category) %>%
+  summarise_all(~ifelse(is.numeric(.), "Numeric", "Categorical")) %>%
+  gather(Feature, Type) %>%
+  count(Type)
+
+# Format feature summary as text
+feature_summary_text <- paste0(feature_types$Type, ": ", feature_types$n, collapse = ", ")
+
+# Single cat() output
+cat(
+  "FEATURE PREPARATION SUMMARY:\n",
+  "Training features shape: ", dim(train_features)[1], " rows x ", dim(train_features)[2], " columns\n",
+  "Test features shape    : ", dim(test_features)[1], " rows x ", dim(test_features)[2], " columns\n",
+  "Number of features for modeling (excluding target): ", ncol(train_features) - 1, "\n\n",
+  "Feature type summary: ", feature_summary_text, "\n"
+)
+```
+
+### Model Implementation Strategy
+
+1.  **BASELINE MODEL (Logistic Regression):**
+    -   Establish performance benchmark
+    -   Identify most important linear predictors
+    -   Provide interpretable coefficients
+2.  **TREE-BASED MODELS (Random Forest, XGBoost):**
+    -   Capture non-linear relationships
+    -   Handle feature interactions automatically
+    -   Provide feature importance rankings
+3.  **DISTANCE-BASED MODEL (KNN):**
+    -   Leverage geographic clustering
+    -   Capture local neighborhood effects
+    -   Non-parametric approach
+4.  **KERNEL METHOD (SVM):**
+    -   Complex decision boundaries
+    -   Robust to outliers
+    -   High-dimensional feature space
+5.  **MODEL COMPARISON:**
+    -   Statistical significance testing
+    -   Computational efficiency analysis
+    -   Error pattern analysis
+    -   Business interpretation of results
+
+### Hyperparameter Tuning Strategy
+
+Each model will undergo systematic hyperparameter optimization:
+
+#### Random Forest
+
+-   `ntree`: Number of trees (500, 1000, 1500)
+-   `mtry`: Variables per split (sqrt(p), p/3, p/2)
+-   `nodesize`: Minimum node size (1, 5, 10)
+
+#### XGBoost
+
+-   `nrounds`: Number of boosting rounds (100, 500, 1000)
+-   `max_depth`: Tree depth (3, 6, 9)
+-   `eta`: Learning rate (0.01, 0.1, 0.3)
+-   `gamma`: Minimum split loss (0, 0.1, 1)
+
+#### SVM
+
+-   `cost`: Regularization parameter (0.1, 1, 10, 100)
+-   `kernel`: Kernel type (linear, radial, polynomial)
+-   `gamma`: Kernel coefficient (0.001, 0.01, 0.1, 1)
+
+#### KNN
+
+-   `k`: Number of neighbors (3, 5, 7, 9, 11, 15)
+-   Distance metric: Euclidean, Manhattan
+-   Scaling: Standardized vs. normalized features
+
+### Expected Outcomes and Business Impact
+
+1.  **PREDICTIVE INSIGHTS:**
+    -   Identify key drivers of premium pricing in Sydney
+    -   Quantify impact of location vs. property characteristics
+    -   Understand host quality effects on pricing power
+2.  **MARKET SEGMENTATION:**
+    -   Clear classification of Sydney accommodation market
+    -   Neighborhood-specific pricing patterns
+    -   Property type optimization strategies
+3.  **POLICY IMPLICATIONS:**
+    -   Evidence for short-term rental regulations
+    -   Impact assessment on Sydney housing affordability
+    -   Tourism industry planning insights
+4.  **BUSINESS APPLICATIONS:**
+    -   Investment guidance for property owners
+    -   Pricing optimization for hosts
+    -   Market entry strategies for new listings
+5.  **TECHNICAL CONTRIBUTIONS:**
+    -   Comparative analysis of ML algorithms on Sydney data
+    -   Feature importance insights for accommodation pricing
+    -   Geographic modeling approaches for urban markets
+
+------------------------------------------------------------------------
+
+# Implementation Timeline
+
+## Week 7: Project Plan and EDA (Current Phase)
+
+**Deliverables:** - [x] Problem definition and Sydney relevance established - [x] Data source properly cited (Inside Airbnb) - [x] Feature selection completed (20 variables from 75+) - [x] Data cleaning and preprocessing pipeline - [x] Comprehensive exploratory data analysis - [x] Five-model classification strategy defined
+
+**Key Insights Discovered:** - Sydney market shows clear price segmentation across neighborhoods - Premium properties concentrated in CBD, Bondi, and Manly areas - Strong correlation between amenities count and pricing tier - Geographic clustering effects evident in price categories
+
+## Week 12: Model Implementation and Evaluation
+
+**Planned Activities:** 1. **Model Development** (Days 1-3) - Implement all five classification algorithms - Hyperparameter tuning using cross-validation - Feature importance analysis
+
+2.  **Model Evaluation** (Days 4-5)
+    -   Performance comparison across all metrics
+    -   Statistical significance testing
+    -   Error analysis and confusion matrices
+3.  **Results Interpretation** (Days 6-7)
+    -   Business impact analysis
+    -   Policy implications discussion
+    -   Visualization of key findings
+
+## Week 12: Final Presentation and Report
+
+**Presentation Structure** (7 minutes + 3 minutes Q&A): 1. **Sydney Context**: Housing market and tourism relevance 2. **Data Story**: Inside Airbnb dataset insights 3. **Model Results**: Best performing algorithm and accuracy 4. **Key Findings**: What drives premium pricing in Sydney 5. **Impact**: Policy and business implications
+
+**Final Report** (10 pages): - Complete methodology and results - Model comparison and evaluation - Sydney-specific insights and recommendations - Limitations and future research directions
+
+------------------------------------------------------------------------
+
+# Conclusion and Next Steps
+
+This analysis establishes a comprehensive framework for classifying Sydney Airbnb properties into price categories using machine learning techniques. Our approach addresses key Australian housing and tourism policy questions while demonstrating advanced statistical modeling capabilities.
+
+## Key Strengths of This Approach
+
+1.  **Local Relevance**: Focus on Sydney addresses Australian housing affordability and tourism recovery
+2.  **Methodological Rigor**: Five-algorithm comparison with proper evaluation metrics
+3.  **Data Quality**: Careful feature selection and preprocessing from authoritative source
+4.  **Business Impact**: Actionable insights for multiple stakeholder groups
+5.  **Technical Innovation**: Advanced ML techniques applied to Australian market data
+
+## Anticipated Contributions
+
+-   **Academic**: Comparative analysis of classification algorithms on Sydney accommodation data
+-   **Policy**: Evidence-based insights for short-term rental regulations
+-   **Industry**: Practical guidance for property investment and host optimization
+-   **Technical**: Demonstration of ML applications in real estate pricing
+
+## Quality Assurance
+
+-   **Reproducible Research**: All code documented and version controlled
+-   **Statistical Validity**: Proper train-test splits and cross-validation
+-   **Ethical Considerations**: Public data used appropriately
+-   **Attribution**: Proper citation of data sources and methodologies
+
+------------------------------------------------------------------------
+
+# References
+
+1.  Inside Airbnb. (2025). Sydney, New South Wales, Australia Dataset. Retrieved from <http://insideairbnb.com/get-the-data/>
+
+2.  Cox, M. (2024). Inside Airbnb: Adding Data to the Debate. Retrieved from <http://insideairbnb.com/about.html>
+
+3.  Australian Bureau of Statistics. (2023). Housing Occupancy and Costs. Retrieved from <https://www.abs.gov.au/>
+
+4.  NSW Government. (2024). Short-term Rental Accommodation Industry in NSW. Retrieved from <https://www.nsw.gov.au/>
+
+5.  James, G., Witten, D., Hastie, T., & Tibshirani, R. (2021). An Introduction to Statistical Learning with Applications in R (2nd ed.). Springer.
+
+------------------------------------------------------------------------
+
+# Appendix
+
+## Data Dictionary
+
+```{r data-dictionary}
+# Create comprehensive data dictionary
+data_dict <- data.frame(
+  Variable = c("price_category", "accommodates", "bedrooms", "bathrooms",
+               "property_type", "room_type", "neighbourhood_cleansed",
+               "latitude", "longitude", "host_is_superhost", "host_response_rate",
+               "host_listings_count", "review_scores_rating", "number_of_reviews",
+               "availability_365", "minimum_nights", "amenities_count",
+               "distance_from_cbd", "is_popular_area", "property_size"),
+ 
+  Type = c("Categorical", "Numeric", "Numeric", "Numeric",
+           "Categorical", "Categorical", "Categorical",
+           "Numeric", "Numeric", "Logical", "Numeric",
+           "Numeric", "Numeric", "Numeric",
+           "Numeric", "Numeric", "Numeric",
+           "Numeric", "Logical", "Categorical"),
+ 
+  Description = c("Target variable: Budget (<$100), Mid-Market ($100-200), Premium (>$200)",
+                  "Maximum number of guests property can accommodate",
+                  "Number of bedrooms available",
+                  "Number of bathrooms available",
+                  "Type of property (Apartment, House, etc.)",
+                  "Type of rental (Entire home, Private room, Shared room)",
+                  "Sydney neighbourhood/suburb name",
+                  "Geographic latitude coordinate",
+                  "Geographic longitude coordinate",
+                  "Whether host has Superhost status",
+                  "Host response rate as proportion (0-1)",
+                  "Number of listings managed by host",
+                  "Average review score rating (1-5 scale)",
+                  "Total number of reviews received",
+                  "Days available for booking per year",
+                  "Minimum nights required for booking",
+                  "Number of amenities provided",
+                  "Calculated distance from Sydney CBD",
+                  "Whether in popular tourist area",
+                  "Property size category based on capacity")
+)
+
+kable(data_dict, caption = "Complete Data Dictionary for Model Features")
+```
+
+## Extra Graphs
+
+```{r}
+
+
+
+if (FALSE){
+{r geographic-analysis, fig.height=10}
+# Geographic distribution
+p5 <- ggplot(listings, aes(x = longitude, y = latitude, color = price_category)) +
+  geom_point(alpha = 0.6, size = 0.8) +
+  labs(title = "Geographic Distribution of Properties by Price Category",
+       subtitle = "Sydney Airbnb listings colored by price segment",
+       x = "Longitude", y = "Latitude") +
+  theme_minimal() +
+  scale_color_manual(values = c("Budget" = "#2ecc71", "Mid-Market" = "#f39c12", "Premium" = "#e74c3c")) +
+  guides(color = guide_legend(override.aes = list(size = 3, alpha = 1)))
+
+
+Neighbourhood Analysis
+
+{r neighbourhood-analysis, fig.height=8}
+# Top neighbourhoods by count
+top_neighbourhoods <- listings %>%
+  count(neighbourhood_cleansed, sort = TRUE) %>%
+  head(15)
+
+p7 <- ggplot(top_neighbourhoods, aes(x = reorder(neighbourhood_cleansed, n), y = n)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(title = "Top 15 Sydney Neighbourhoods by Listing Count",
+       x = "Neighbourhood", y = "Number of Listings") +
+  theme_minimal()
+
+# Median price by neighbourhood (top neighbourhoods only)
+neighbourhood_price <- listings %>%
+  filter(neighbourhood_cleansed %in% top_neighbourhoods$neighbourhood_cleansed) %>%
+  group_by(neighbourhood_cleansed) %>%
+  summarise(
+    count = n(),
+    median_price = median(price_numeric),
+    premium_pct = mean(price_category == "Premium") * 100
+  ) %>%
+  arrange(desc(median_price))
+
+p8 <- ggplot(neighbourhood_price, aes(x = reorder(neighbourhood_cleansed, median_price),
+                                     y = median_price)) +
+  geom_col(fill = "darkgreen") +
+  coord_flip() +
+  labs(title = "Median Price by Neighbourhood",
+       subtitle = "Top 15 neighbourhoods by listing count",
+       x = "Neighbourhood", y = "Median Price (AUD)") +
+  theme_minimal() +
+  scale_y_continuous(labels = dollar_format(prefix = "$"))
+
+grid.arrange(p7, p8, ncol = 1)}
+```
+
+------------------------------------------------------------------------
+
+*This analysis was conducted as part of STAT5003 Computational Statistical Methods coursework, focusing on real-world application of machine learning techniques to Australian housing market data.*
