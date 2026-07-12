@@ -191,8 +191,10 @@ with tab_advisor:
     with right:
         st.subheader("Recommendation")
         st.metric("Recommended price tier", pred.tier, help="Most likely market tier")
+        # Escape $ so Streamlit's markdown doesn't read "$200 - $400" as LaTeX.
+        band_md = pred.band.replace("$", "\\$")
         st.markdown(
-            f"**Suggested nightly band:** {pred.band} &nbsp;|&nbsp; "
+            f"**Suggested nightly band:** {band_md} &nbsp;|&nbsp; "
             f"**Model confidence:** {pred.confidence:.0%}"
         )
 
@@ -358,7 +360,7 @@ with tab_market:
 st.divider()
 b, m = int(cfg.target.budget_max), int(cfg.target.mid_market_max)
 st.caption(
-    f"Data: Inside Airbnb (insideairbnb.com), CC BY 4.0. Price tiers - Budget: ≤${b}, "
-    f"Mid-Market: ${b}-{m}, Premium: >${m} AUD/night. Predictions are decision support, "
+    f"Data: Inside Airbnb (insideairbnb.com), CC BY 4.0. Price tiers - Budget: ≤\\${b}, "
+    f"Mid-Market: \\${b}-{m}, Premium: >\\${m} AUD/night. Predictions are decision support, "
     "not financial advice."
 )

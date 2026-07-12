@@ -1,0 +1,12 @@
+# App theme matched to the project's chart palette (viz/style.py).
+# The charts are designed and contrast-validated for a light surface,
+# so the app pins the light theme rather than following the OS setting.
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#fcfcfb"
+secondaryBackgroundColor = "#f2f1ee"
+textColor = "#0b0b0b"
+
+[browser]
+gatherUsageStats = false
