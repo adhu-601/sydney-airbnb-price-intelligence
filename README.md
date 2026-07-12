@@ -1,5 +1,6 @@
 # Sydney Airbnb Price Intelligence
 
+[![CI](https://github.com/adhu-601/sydney-airbnb-price-intelligence/actions/workflows/ci.yml/badge.svg)](https://github.com/adhu-601/sydney-airbnb-price-intelligence/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Code style](https://img.shields.io/badge/lint-ruff-orange)
