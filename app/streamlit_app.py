@@ -229,8 +229,9 @@ with tab_advisor:
             st.markdown(f"**Comparable listings in {neighbourhood}** ({len(comps):,} with the same room type)")
             c1, c2, c3 = st.columns(3)
             c1.metric("Median price", f"${comps['price_numeric'].median():,.0f}")
-            c2.metric("25th–75th pct", f"${comps['price_numeric'].quantile(0.25):,.0f}–"
-                                        f"${comps['price_numeric'].quantile(0.75):,.0f}")
+            # Single $ so Streamlit doesn't treat a $...$ pair as LaTeX.
+            c2.metric("25th–75th pct", f"${comps['price_numeric'].quantile(0.25):,.0f} – "
+                                        f"{comps['price_numeric'].quantile(0.75):,.0f}")
             c3.metric("Median rating", f"{comps['review_scores_rating'].median():.2f} ★")
         else:
             st.info(f"Fewer than 10 comparable listings in {neighbourhood} for this room type.")
