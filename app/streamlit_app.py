@@ -18,6 +18,7 @@ product.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 from pathlib import Path
@@ -302,14 +303,10 @@ def get_market_data():
 @st.cache_data(show_spinner=False)
 def get_reports():
     out = {"metrics": {}, "importance": {}}
-    try:
+    with contextlib.suppress(Exception):
         out["metrics"] = json.loads((ROOT / "reports" / "metrics.json").read_text())
-    except Exception:
-        pass
-    try:
+    with contextlib.suppress(Exception):
         out["importance"] = json.loads((ROOT / "reports" / "feature_importance.json").read_text())
-    except Exception:
-        pass
     return out
 
 
@@ -732,43 +729,41 @@ def render_market() -> None:
     # ---- map + top neighbourhoods ----
     mx_band("Where the listings are", "geography of price across Sydney")
     col_map, col_bar = st.columns([1.55, 1], gap="large")
-    with col_map:
-        with st.container(border=True):
-            sect("Listings map", "Coloured by price tier · hover any point for details.")
-            sample = fdf.sample(min(len(fdf), 4000), random_state=7)
-            fig = px.scatter_map(
-                sample, lat="latitude", lon="longitude", color="price_category",
-                category_orders={"price_category": TIER_ORDER}, color_discrete_map=TIER_COLORS,
-                custom_data=["neighbourhood_cleansed", "price_numeric", "room_type",
-                             "bedrooms", "review_scores_rating", "distance_from_cbd_km"],
-                zoom=9.4, height=520, map_style="carto-positron")
-            fig.update_traces(marker=dict(size=7, opacity=0.8), hovertemplate=(
-                "<b>%{customdata[0]}</b><br>"
-                "<b>$%{customdata[1]:,.0f}</b> / night · %{customdata[2]}<br>"
-                "%{customdata[3]:.0f} bd · ★ %{customdata[4]:.2f}<br>"
-                "%{customdata[5]:.1f} km to CBD<extra></extra>"))
-            fig.update_layout(font=dict(family=FONT, color=INK), margin=dict(l=0, r=0, t=6, b=0),
-                              legend=dict(orientation="h", y=-0.02, x=0, title="",
-                                          font=dict(size=12, color=INK_2)),
-                              hoverlabel=dict(bgcolor="#FFFFFF", bordercolor=BORDER,
-                                              font=dict(family=FONT, color=INK, size=12.5)))
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with col_map, st.container(border=True):
+        sect("Listings map", "Coloured by price tier · hover any point for details.")
+        sample = fdf.sample(min(len(fdf), 4000), random_state=7)
+        fig = px.scatter_map(
+            sample, lat="latitude", lon="longitude", color="price_category",
+            category_orders={"price_category": TIER_ORDER}, color_discrete_map=TIER_COLORS,
+            custom_data=["neighbourhood_cleansed", "price_numeric", "room_type",
+                         "bedrooms", "review_scores_rating", "distance_from_cbd_km"],
+            zoom=9.4, height=520, map_style="carto-positron")
+        fig.update_traces(marker=dict(size=7, opacity=0.8), hovertemplate=(
+            "<b>%{customdata[0]}</b><br>"
+            "<b>$%{customdata[1]:,.0f}</b> / night · %{customdata[2]}<br>"
+            "%{customdata[3]:.0f} bd · ★ %{customdata[4]:.2f}<br>"
+            "%{customdata[5]:.1f} km to CBD<extra></extra>"))
+        fig.update_layout(font=dict(family=FONT, color=INK), margin=dict(l=0, r=0, t=6, b=0),
+                          legend=dict(orientation="h", y=-0.02, x=0, title="",
+                                      font=dict(size=12, color=INK_2)),
+                          hoverlabel=dict(bgcolor="#FFFFFF", bordercolor=BORDER,
+                                          font=dict(family=FONT, color=INK, size=12.5)))
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    with col_bar:
-        with st.container(border=True):
-            sect("Priciest neighbourhoods", "Median nightly rate · ≥100 listings.")
-            top = (fdf.groupby("neighbourhood_cleansed")
-                   .agg(median_price=("price_numeric", "median"), listings=("id", "count"))
-                   .query("listings >= 100").sort_values("median_price").tail(11).reset_index())
-            fig = go.Figure(go.Bar(
-                x=top["median_price"], y=top["neighbourhood_cleansed"], orientation="h",
-                marker=dict(color=OLIVE, line=dict(color=SURFACE, width=1)),
-                text=[money(v) for v in top["median_price"]], textposition="outside",
-                textfont=dict(color=INK_2, size=11), cliponaxis=False,
-                hovertemplate="%{y}: $%{x:,.0f} median<extra></extra>"))
-            fig = styled(fig, height=520)
-            fig.update_layout(xaxis_range=[0, top["median_price"].max() * 1.2])
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with col_bar, st.container(border=True):
+        sect("Priciest neighbourhoods", "Median nightly rate · ≥100 listings.")
+        top = (fdf.groupby("neighbourhood_cleansed")
+               .agg(median_price=("price_numeric", "median"), listings=("id", "count"))
+               .query("listings >= 100").sort_values("median_price").tail(11).reset_index())
+        fig = go.Figure(go.Bar(
+            x=top["median_price"], y=top["neighbourhood_cleansed"], orientation="h",
+            marker=dict(color=OLIVE, line=dict(color=SURFACE, width=1)),
+            text=[money(v) for v in top["median_price"]], textposition="outside",
+            textfont=dict(color=INK_2, size=11), cliponaxis=False,
+            hovertemplate="%{y}: $%{x:,.0f} median<extra></extra>"))
+        fig = styled(fig, height=520)
+        fig.update_layout(xaxis_range=[0, top["median_price"].max() * 1.2])
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     if len(top):
         insight(f"<b>{top.iloc[-1]['neighbourhood_cleansed']}</b> is the priciest large market at "
@@ -779,21 +774,20 @@ def render_market() -> None:
     # ---- distribution + distance decay ----
     mx_band("What drives nightly price", "distribution, location and features")
     c1, c2 = st.columns(2, gap="large")
-    with c1:
-        with st.container(border=True):
-            sect("Price distribution by tier", "Where the market's nightly rates concentrate.")
-            fig = go.Figure()
-            for t in TIER_ORDER:
-                s = fdf.loc[fdf["price_category"] == t, "price_numeric"]
-                s = s[s <= fdf["price_numeric"].quantile(0.98)]
-                fig.add_trace(go.Histogram(
-                    x=s, name=t, marker=dict(color=TIER_COLORS[t], line=dict(color=SURFACE, width=1)),
-                    opacity=0.85, hovertemplate=f"{t}<br>$%{{x:.0f}}: %{{y}}<extra></extra>"))
-            fig = styled(fig, height=300, legend=True, xtitle="AUD / night", ytitle="listings")
-            fig.update_layout(barmode="stack", bargap=0.04)
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with c1, st.container(border=True):
+        sect("Price distribution by tier", "Where the market's nightly rates concentrate.")
+        fig = go.Figure()
+        for t in TIER_ORDER:
+            s = fdf.loc[fdf["price_category"] == t, "price_numeric"]
+            s = s[s <= fdf["price_numeric"].quantile(0.98)]
+            fig.add_trace(go.Histogram(
+                x=s, name=t, marker=dict(color=TIER_COLORS[t], line=dict(color=SURFACE, width=1)),
+                opacity=0.85, hovertemplate=f"{t}<br>$%{{x:.0f}}: %{{y}}<extra></extra>"))
+        fig = styled(fig, height=300, legend=True, xtitle="AUD / night", ytitle="listings")
+        fig.update_layout(barmode="stack", bargap=0.04)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    with c2:
+    with c2:  # noqa: SIM117
         with st.container(border=True):
             sect("Distance to CBD vs price", "Median nightly rate by distance ring.")
             d = fdf.copy()
@@ -816,23 +810,22 @@ def render_market() -> None:
 
     # ---- tier mix by room type + amenity premiums ----
     c1, c2 = st.columns(2, gap="large")
-    with c1:
-        with st.container(border=True):
-            sect("Tier mix by room type", "Share of each tier within a room type.")
-            mix = (fdf.groupby("room_type", observed=True)["price_category"]
-                   .value_counts(normalize=True).rename("share").reset_index())
-            fig = go.Figure()
-            for t in TIER_ORDER:
-                sub = mix[mix["price_category"] == t]
-                fig.add_trace(go.Bar(
-                    x=sub["share"], y=sub["room_type"], orientation="h", name=t,
-                    marker=dict(color=TIER_COLORS[t], line=dict(color=SURFACE, width=2)),
-                    hovertemplate=f"{t}: %{{x:.0%}}<extra></extra>"))
-            fig = styled(fig, height=300, legend=True, xtitle="share of listings")
-            fig.update_layout(barmode="stack", xaxis_tickformat=".0%")
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with c1, st.container(border=True):
+        sect("Tier mix by room type", "Share of each tier within a room type.")
+        mix = (fdf.groupby("room_type", observed=True)["price_category"]
+               .value_counts(normalize=True).rename("share").reset_index())
+        fig = go.Figure()
+        for t in TIER_ORDER:
+            sub = mix[mix["price_category"] == t]
+            fig.add_trace(go.Bar(
+                x=sub["share"], y=sub["room_type"], orientation="h", name=t,
+                marker=dict(color=TIER_COLORS[t], line=dict(color=SURFACE, width=2)),
+                hovertemplate=f"{t}: %{{x:.0%}}<extra></extra>"))
+        fig = styled(fig, height=300, legend=True, xtitle="share of listings")
+        fig.update_layout(barmode="stack", xaxis_tickformat=".0%")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    with c2:
+    with c2:  # noqa: SIM117
         with st.container(border=True):
             sect("Amenity price premium", "Median nightly rate: with vs without.")
             amen = {"has_pool": "Pool", "has_air_conditioning": "Air con", "has_gym": "Gym",
@@ -866,7 +859,7 @@ def render_market() -> None:
     # ---- model transparency + market composition ----
     mx_band("How the model decides", "and what the market is made of")
     c1, c2 = st.columns([1.3, 1], gap="large")
-    with c1:
+    with c1:  # noqa: SIM117
         with st.container(border=True):
             sect("What the model weighs most", "Global XGBoost feature importance (top 10).")
             if reports["importance"]:
@@ -881,7 +874,7 @@ def render_market() -> None:
                 st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
             else:
                 st.info("Feature importance report not available.")
-    with c2:
+    with c2:  # noqa: SIM117
         with st.container(border=True):
             sect("Listings by room type", "Composition of the filtered market.")
             comp = fdf["room_type"].value_counts()
