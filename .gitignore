@@ -24,3 +24,6 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+# local streamlit run log
+.streamlit_run.log
